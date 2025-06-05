@@ -36,7 +36,7 @@ Wherever the notebook kernel lives —- on your laptop, a remote server, or in t
 
 ## Requirements
 
-- Visual Studio Code version 1.100.0 or higher (for Language Model Tools support)
+- Visual Studio Code version 1.95 or higher (for Language Model Tools support)
 
 ## Extension Settings
 
