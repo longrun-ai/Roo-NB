@@ -1,0 +1,296 @@
+{
+  "name": "roo-nb",
+  "displayName": "Roo Notebook Tools",
+  "version": "0.5.0",
+  "description": "Notebook operation tools for Language Models",
+  "publisher": "ComplYue",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/longrun-ai/Roo-NB"
+  },
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onNotebook:*"
+  ],
+  "main": "./out/extension.js",
+  "icon": "roo-nb.png",
+  "contributes": {
+    "configuration": {
+      "title": "Roo Notebook Tools",
+      "properties": {
+        "roo-nb.maxOutputSize": {
+          "type": "integer",
+          "default": 2000,
+          "description": "Maximum size (in characters) for cell output truncation"
+        },
+        "roo-nb.timeoutSeconds": {
+          "type": "integer",
+          "default": 30,
+          "description": "Maximum seconds to wait for cell execution"
+        }
+      }
+    },
+    "languageModelTools": [
+      {
+        "name": "get_notebook_info",
+        "displayName": "Get Notebook Info",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "get_notebook_info",
+        "modelDescription": "Get comprehensive information about the active notebook, including URI, kernel, and cell statistics."
+      },
+      {
+        "name": "get_notebook_cells",
+        "displayName": "Get Notebook Cells",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "get_notebook_cells",
+        "modelDescription": "Get information about all cells in the active notebook. Includes cell indexes, types, content, and outputs."
+      },
+      {
+        "name": "insert_notebook_cells",
+        "displayName": "Insert Notebook Cells",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "insert_notebook_cells",
+        "modelDescription": "Insert multiple cells at a specified position in the active notebook. By default, new code cells are executed unless noexec is true.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "cells": {
+              "type": "array",
+              "description": "Array of cell definitions to insert. Each cell must specify content and cell_type.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "content": {
+                    "type": "string",
+                    "description": "The content of the cell to insert"
+                  },
+                  "cell_type": {
+                    "type": "string",
+                    "enum": [
+                      "code",
+                      "markdown"
+                    ],
+                    "description": "The type of cell to insert - either 'code' for executable cells or 'markdown' for text cells"
+                  },
+                  "language_id": {
+                    "type": "string",
+                    "description": "Optional language ID for code cells (e.g., 'python', 'javascript'). If not provided, will try to infer from existing code cells or default to 'python'"
+                  }
+                },
+                "required": [
+                  "content",
+                  "cell_type"
+                ]
+              }
+            },
+            "insert_position": {
+              "type": "integer",
+              "description": "Optional position to insert cells. Defaults to the end of the notebook. Must be between 0 and the current cell count"
+            },
+            "noexec": {
+              "type": "boolean",
+              "description": "If true, skips execution of inserted code cells. By default (false), code cells are executed after insertion"
+            }
+          },
+          "required": [
+            "cells"
+          ],
+          "additionalProperties": {}
+        }
+      },
+      {
+        "name": "replace_notebook_cells",
+        "displayName": "Replace Notebook Cells",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "replace_notebook_cells",
+        "modelDescription": "Replace a range of cells in the notebook with new cells. Uses half-open range [start_index, stop_index) - meaning stop_index is exclusive. Executed automatically unless noexec is true.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "start_index": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "The starting index (inclusive) of the range of cells to replace"
+            },
+            "stop_index": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "The stopping index (exclusive) of the range of cells to replace. Must be greater than start_index. For example, to replace a single cell at index i, use start_index=i and stop_index=i+1"
+            },
+            "cells": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "content": {
+                    "type": "string"
+                  },
+                  "cell_type": {
+                    "type": "string",
+                    "enum": [
+                      "code",
+                      "markdown"
+                    ]
+                  },
+                  "language_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "content",
+                  "cell_type"
+                ]
+              }
+            },
+            "noexec": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "start_index",
+            "stop_index",
+            "cells"
+          ],
+          "additionalProperties": {}
+        }
+      },
+      {
+        "name": "modify_notebook_cell_content",
+        "displayName": "Modify Notebook Cell Content",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "modify_notebook_cell_content",
+        "modelDescription": "Modify the content of an existing cell. By default, modified code cells are executed unless noexec is true.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "cell_index": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "The index of the cell to modify. Must be between 0 and the current cell count minus 1"
+            },
+            "content": {
+              "type": "string",
+              "description": "The new content for the cell. Will maintain the cell's existing type and language"
+            },
+            "noexec": {
+              "type": "boolean",
+              "description": "If true, skips execution of the modified cell if it's a code cell. By default (false), code cells are executed after modification"
+            }
+          },
+          "required": [
+            "cell_index",
+            "content"
+          ],
+          "additionalProperties": {}
+        }
+      },
+      {
+        "name": "execute_notebook_cells",
+        "displayName": "Execute Notebook Cells",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "execute_notebook_cells",
+        "modelDescription": "Execute a range of cells in the active notebook. Uses half-open range [start_index, stop_index) - meaning stop_index is exclusive.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "start_index": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "The starting index (inclusive) of the range of cells to execute"
+            },
+            "stop_index": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "The stopping index (exclusive) of the range of cells to execute. Must be greater than start_index. For example, to execute a single cell at index i, use start_index=i and stop_index=i+1"
+            }
+          },
+          "required": [
+            "start_index",
+            "stop_index"
+          ],
+          "additionalProperties": {}
+        }
+      },
+      {
+        "name": "delete_notebook_cells",
+        "displayName": "Delete Notebook Cells",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "delete_notebook_cells",
+        "modelDescription": "Delete a range of cells from the notebook. Uses half-open range [start_index, stop_index) - meaning stop_index is exclusive.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "start_index": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "The starting index (inclusive) of the range of cells to delete"
+            },
+            "stop_index": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "The stopping index (exclusive) of the range of cells to delete. Must be greater than start_index. For example, to delete a single cell at index i, use start_index=i and stop_index=i+1"
+            }
+          },
+          "required": [
+            "start_index",
+            "stop_index"
+          ],
+          "additionalProperties": {}
+        }
+      },
+      {
+        "name": "save_notebook",
+        "displayName": "Save Notebook",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "save_notebook",
+        "modelDescription": "Save the active notebook to disk."
+      },
+      {
+        "name": "open_notebook",
+        "displayName": "Open Notebook",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "open_notebook",
+        "modelDescription": "Open a specified .ipynb file in the workspace and make it the active notebook editor.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Path to the .ipynb notebook file to open, relative to workspace root. The file must exist and be a valid Jupyter notebook"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "additionalProperties": {}
+        }
+      }
+    ]
+  },
+  "extensionDependencies": [],
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "build": "mkdir -p bin && vsce package --out bin/roo-nb-v$npm_package_version.vsix"
+  },
+  "devDependencies": {
+    "@types/node": "18.x",
+    "@types/vscode": "^1.100.0",
+    "@typescript-eslint/eslint-plugin": "^6.13.1",
+    "@typescript-eslint/parser": "^6.13.1",
+    "@vscode/vsce": "^3.3.2",
+    "eslint": "^8.54.0",
+    "typescript": "^5.3.2"
+  }
+}
