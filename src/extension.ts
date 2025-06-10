@@ -1,36 +1,23 @@
 import * as vscode from 'vscode';
 import { NotebookService } from './notebook';
 
-// Proper interface for tool invocation
-interface PreparedToolInvocation {
-  invocationMessage: string;
-  confirmationMessages: {
-    title: string;
-    message: vscode.MarkdownString | string;
-  };
-}
-
 abstract class BaseNotebookTool<T> {
   abstract name: string;
   abstract displayName: string;
 
-  async prepareInvocation(
+  prepareInvocation(
     options: vscode.LanguageModelToolInvocationPrepareOptions<T>,
     _token: vscode.CancellationToken
-  ): Promise<PreparedToolInvocation> {
+  ): vscode.ProviderResult<vscode.PreparedToolInvocation> {
     return {
       invocationMessage: `Invoking ${this.displayName}`,
-      confirmationMessages: {
-        title: this.displayName,
-        message: new vscode.MarkdownString(`Confirming invocation of ${this.displayName}`)
-      }
     };
   }
 
   abstract invoke(
     options: vscode.LanguageModelToolInvocationOptions<T>,
     token: vscode.CancellationToken
-  ): Promise<vscode.LanguageModelToolResult>;
+  ): vscode.ProviderResult<vscode.LanguageModelToolResult>;
 
   register(context: vscode.ExtensionContext) {
     context.subscriptions.push(vscode.lm.registerTool(this.name, this));
