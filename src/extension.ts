@@ -364,6 +364,38 @@ class OpenNotebookTool extends BaseNotebookTool<OpenNotebookInput> {
   }
 }
 
+class RestartKernelTool extends BaseNotebookTool<void> {
+  name = 'restart_kernel';
+  displayName = 'Restart Kernel';
+
+  async invoke(_options: vscode.LanguageModelToolInvocationOptions<void>, _token: vscode.CancellationToken) {
+    return ErrorUtils.safeExecute(async () => {
+      const result = await NotebookService.restartKernel();
+      return this.createToolResult(result);
+    }, this.name, { toolName: this.name })
+      .catch(error => {
+        Logger.error('Tool execution failed', error, { toolName: this.name });
+        return this.createToolResult(`Error restarting kernel: ${ErrorFormatter.forAgent(error)}`, true);
+      });
+  }
+}
+
+class InterruptKernelTool extends BaseNotebookTool<void> {
+  name = 'interrupt_kernel';
+  displayName = 'Interrupt Kernel';
+
+  async invoke(_options: vscode.LanguageModelToolInvocationOptions<void>, _token: vscode.CancellationToken) {
+    return ErrorUtils.safeExecute(async () => {
+      const result = await NotebookService.interruptKernel();
+      return this.createToolResult(result);
+    }, this.name, { toolName: this.name })
+      .catch(error => {
+        Logger.error('Tool execution failed', error, { toolName: this.name });
+        return this.createToolResult(`Error interrupting kernel: ${ErrorFormatter.forAgent(error)}`, true);
+      });
+  }
+}
+
 let mcpServer: MCPServer | null = null;
 
 export function activate(context: vscode.ExtensionContext) {
@@ -392,7 +424,9 @@ export function activate(context: vscode.ExtensionContext) {
     new ExecuteNotebookCellsTool(),
     new DeleteNotebookCellsTool(),
     new SaveNotebookTool(),
-    new OpenNotebookTool()
+    new OpenNotebookTool(),
+    new RestartKernelTool(),
+    new InterruptKernelTool()
   ];
 
   tools.forEach(tool => tool.register(context));

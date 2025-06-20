@@ -319,6 +319,20 @@
           ],
           "additionalProperties": {}
         }
+      },
+      {
+        "name": "restart_kernel",
+        "displayName": "Restart Kernel",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "restart_kernel",
+        "modelDescription": "Restart the kernel for the active notebook. This will stop the current kernel session and start a new one, clearing all variables and state."
+      },
+      {
+        "name": "interrupt_kernel",
+        "displayName": "Interrupt Kernel",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "interrupt_kernel",
+        "modelDescription": "Interrupt the current kernel execution for the active notebook. This stops any currently running code without restarting the kernel session."
       }
     ]
   },

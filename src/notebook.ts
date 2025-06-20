@@ -644,6 +644,48 @@ export class NotebookService {
 			operation: 'saveNotebook'
 		});
 	}
+
+	/**
+	 * Restarts the kernel for the active notebook
+	 * 
+	 * @returns A string indicating success or failure
+	 */
+	static async restartKernel(): Promise<string> {
+		return ErrorUtils.safeExecute(async () => {
+			const notebookEditor = vscode.window.activeNotebookEditor
+			if (!notebookEditor) {
+				throw ErrorFactory.noActiveNotebook('restartKernel');
+			}
+
+			// Execute the restart kernel command
+			await vscode.commands.executeCommand('notebook.restartKernel')
+
+			return `Successfully restarted kernel for notebook: ${notebookEditor.notebook.uri.toString()}`
+		}, 'restartKernel', {
+			operation: 'restartKernel'
+		});
+	}
+
+	/**
+	 * Interrupts the kernel execution for the active notebook
+	 * 
+	 * @returns A string indicating success or failure
+	 */
+	static async interruptKernel(): Promise<string> {
+		return ErrorUtils.safeExecute(async () => {
+			const notebookEditor = vscode.window.activeNotebookEditor
+			if (!notebookEditor) {
+				throw ErrorFactory.noActiveNotebook('interruptKernel');
+			}
+
+			// Execute the interrupt kernel command
+			await vscode.commands.executeCommand('notebook.interruptKernel')
+
+			return `Successfully interrupted kernel execution for notebook: ${notebookEditor.notebook.uri.toString()}`
+		}, 'interruptKernel', {
+			operation: 'interruptKernel'
+		});
+	}
 }
 
 // Backward compatibility - export the old NotebookError as an alias to RooNotebookError

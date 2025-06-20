@@ -227,6 +227,12 @@ export class MCPServer {
                 case 'save_notebook':
                     return await NotebookService.saveNotebook();
 
+                case 'restart_kernel':
+                    return await NotebookService.restartKernel();
+
+                case 'interrupt_kernel':
+                    return await NotebookService.interruptKernel();
+
                 case 'open_notebook': {
                     const { path: notebookPath } = validatedParams;
 
