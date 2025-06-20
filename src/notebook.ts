@@ -1,4 +1,12 @@
 import * as vscode from "vscode"
+import {
+	RooNotebookError,
+	ErrorFactory,
+	Logger,
+	ErrorUtils,
+	type ErrorContext
+} from './errors';
+
 
 function isTextOutput(item: vscode.NotebookCellOutputItem): boolean {
 	if (item.mime.startsWith("text/")) return true
@@ -61,6 +69,11 @@ function showCell(cell: vscode.NotebookCell, maxOutputSize: number): string {
 									result += `\`\`\`\n${textContent}\n\`\`\`\n\n`
 								}
 							} catch (textErr) {
+								Logger.warn('Error extracting text content from cell output', {
+									cellIndex: cell.index,
+									outputIndex: i,
+									error: textErr
+								});
 								result += `> Error extracting text content: ${textErr instanceof Error ? textErr.message : String(textErr)}\n\n`
 							}
 						} else {
@@ -68,6 +81,7 @@ function showCell(cell: vscode.NotebookCell, maxOutputSize: number): string {
 						}
 					}
 				} catch (err) {
+					Logger.warn('Error processing cell output', { cellIndex: cell.index, error: err });
 					result += `> Error processing output: ${err instanceof Error ? err.message : String(err)}\n\n`
 				}
 			}
@@ -97,6 +111,15 @@ async function executeNotebookCells(
 	maxOutputSize: number = 2000,
 	timeoutSeconds: number = 30,
 ): Promise<string> {
+	const context: ErrorContext = {
+		operation: 'executeNotebookCells',
+		startIndex,
+		stopIndex,
+		cellCount: cells.length
+	};
+
+	Logger.operationStart('Execute notebook cells', context);
+
 	// Get the cells to execute
 	const cellsToExecute = cells.slice(startIndex, stopIndex)
 
@@ -104,6 +127,7 @@ async function executeNotebookCells(
 	const codeCells = cellsToExecute.filter((cell) => cell.kind === vscode.NotebookCellKind.Code)
 
 	if (codeCells.length === 0) {
+		Logger.info('No code cells found in execution range', context);
 		return `# Cell Execution\n\nNo code cells found in the specified range (${startIndex}-${stopIndex - 1}).`
 	}
 
@@ -119,15 +143,21 @@ async function executeNotebookCells(
 	const startTime = Date.now()
 
 	// Execute the cells
+	Logger.debug('Executing cells via VS Code command', { ...context, codeCellCount: codeCells.length });
 	await vscode.commands.executeCommand("notebook.cell.execute", {
 		start: startIndex,
 		end: stopIndex,
 	})
 
 	// Poll for execution completion
+	// NOTE: This polling approach is necessary due to VS Code Notebook API limitations.
+	// There's no direct event-based mechanism to detect when all cells have completed execution.
+	// The timeout provides a safety guard against infinite waiting, though race conditions 
+	// may still occur with rapidly executing cells or kernel communication delays.
 	let allComplete = true
 	while (!executionComplete && Date.now() - startTime < timeoutMs) {
 		// Check if execution orders have changed for all cells, indicating completion
+		allComplete = true
 		for (const cell of codeCells) {
 			if (cell.document.getText().trim() === "") {
 				// bypass cells with empty content, they'll never get a new exec order, or we'll hang waiting here
@@ -152,7 +182,10 @@ async function executeNotebookCells(
 	// Format results similar to getCells
 	let result = `# Cell Execution Results\n\n`
 	if (!allComplete) {
+		Logger.warn('Cell execution did not complete within timeout', { ...context, timeout: timeoutSeconds });
 		result += `> Mind that not all cells completed execution within ${timeoutSeconds} seconds!\n`
+	} else {
+		Logger.operationSuccess('Execute notebook cells', context);
 	}
 	result += `Executed ${codeCells.length} code cells in range ${startIndex}-${stopIndex - 1}.\n\n`
 
@@ -174,65 +207,67 @@ export class NotebookService {
 	 * @returns A string containing detailed information about the notebook, including URI, kernel, and cell stats
 	 */
 	static async getNotebookInfo(): Promise<string> {
-		const notebookEditor = vscode.window.activeNotebookEditor
-		if (!notebookEditor) {
-			return "# Notebook Information\n\nNo active notebook found."
-		}
-
-		const notebook = notebookEditor.notebook
-		const uri = notebook.uri.toString()
-
-		// Get total cells count
-		const totalCells = notebook.cellCount
-		const cells = notebook.getCells()
-
-		// Get counts per cell type
-		const markdownCellCount = cells.filter((cell) => cell.kind === vscode.NotebookCellKind.Markup).length
-		const codeCellCount = cells.filter((cell) => cell.kind === vscode.NotebookCellKind.Code).length
-
-		// Get counts per language
-		const languageCounts: Record<string, number> = {}
-		for (const cell of cells) {
-			if (cell.kind === vscode.NotebookCellKind.Code) {
-				const language = cell.document.languageId
-				languageCounts[language] = (languageCounts[language] || 0) + 1
+		return ErrorUtils.safeExecute(async () => {
+			const notebookEditor = vscode.window.activeNotebookEditor
+			if (!notebookEditor) { // no active nb is an expected case for this tool function
+				return "# Notebook Information\n\nNo active notebook found."
 			}
-		}
 
-		const kernelSpec = notebook.metadata?.metadata?.kernelspec
+			const notebook = notebookEditor.notebook
+			const uri = notebook.uri.toString()
 
-		// Get execution info - count executed cells
-		const executedCellsCount = cells.filter(
-			(cell) => cell.kind === vscode.NotebookCellKind.Code && cell.executionSummary !== undefined,
-		).length
+			// Get total cells count
+			const totalCells = notebook.cellCount
+			const cells = notebook.getCells()
 
-		// Format the response
-		let result = `# Notebook Information\n\n`
+			// Get counts per cell type
+			const markdownCellCount = cells.filter((cell) => cell.kind === vscode.NotebookCellKind.Markup).length
+			const codeCellCount = cells.filter((cell) => cell.kind === vscode.NotebookCellKind.Code).length
 
-		result += `## Basic Information\n`
-		result += `- **URI**: ${uri}\n`
-		result += `- **Notebook Type**: ${notebook.notebookType}\n`
-		result += `- **Dirty?**: ${notebookEditor.notebook.isDirty}\n`
-		if (kernelSpec) {
-			result += `- **Kernel Language**: ${kernelSpec.language}\n`
-			result += `- **Kernel**: ${kernelSpec.display_name} (${kernelSpec.name})\n`
-		}
-		result += "\n"
-
-		result += `## Cell Statistics\n`
-		result += `- **Total Cells**: ${totalCells}\n`
-		result += `- **Markdown Cells**: ${markdownCellCount}\n`
-		result += `- **Code Cells**: ${codeCellCount}\n`
-		result += `- **Executed Code Cells**: ${executedCellsCount}\n\n`
-
-		if (Object.keys(languageCounts).length > 0) {
-			result += `## Language Distribution\n`
-			for (const [language, count] of Object.entries(languageCounts)) {
-				result += `- **${language}**: ${count} cells\n`
+			// Get counts per language
+			const languageCounts: Record<string, number> = {}
+			for (const cell of cells) {
+				if (cell.kind === vscode.NotebookCellKind.Code) {
+					const language = cell.document.languageId
+					languageCounts[language] = (languageCounts[language] || 0) + 1
+				}
 			}
-		}
 
-		return result
+			const kernelSpec = notebook.metadata?.metadata?.kernelspec
+
+			// Get execution info - count executed cells
+			const executedCellsCount = cells.filter(
+				(cell) => cell.kind === vscode.NotebookCellKind.Code && cell.executionSummary !== undefined,
+			).length
+
+			// Format the response
+			let result = `# Notebook Information\n\n`
+
+			result += `## Basic Information\n`
+			result += `- **URI**: ${uri}\n`
+			result += `- **Notebook Type**: ${notebook.notebookType}\n`
+			result += `- **Dirty?**: ${notebookEditor.notebook.isDirty}\n`
+			if (kernelSpec) {
+				result += `- **Kernel Language**: ${kernelSpec.language}\n`
+				result += `- **Kernel**: ${kernelSpec.display_name} (${kernelSpec.name})\n`
+			}
+			result += "\n"
+
+			result += `## Cell Statistics\n`
+			result += `- **Total Cells**: ${totalCells}\n`
+			result += `- **Markdown Cells**: ${markdownCellCount}\n`
+			result += `- **Code Cells**: ${codeCellCount}\n`
+			result += `- **Executed Code Cells**: ${executedCellsCount}\n\n`
+
+			if (Object.keys(languageCounts).length > 0) {
+				result += `## Language Distribution\n`
+				for (const [language, count] of Object.entries(languageCounts)) {
+					result += `- **${language}**: ${count} cells\n`
+				}
+			}
+
+			return result
+		}, 'getNotebookInfo', { operation: 'getNotebookInfo' });
 	}
 
 	/**
@@ -242,24 +277,26 @@ export class NotebookService {
 	 * @returns A string containing formatted information about all cells
 	 */
 	static async getCells(maxOutputSize: number = 2000): Promise<string> {
-		const notebookEditor = vscode.window.activeNotebookEditor
-		if (!notebookEditor) {
-			throw new Error("No active notebook editor found.")
-		}
+		return ErrorUtils.safeExecute(async () => {
+			const notebookEditor = vscode.window.activeNotebookEditor
+			if (!notebookEditor) {
+				throw ErrorFactory.noActiveNotebook('getCells');
+			}
 
-		const cells = notebookEditor.notebook.getCells()
-		if (cells.length === 0) {
-			return "# Notebook Analysis\n\nThe notebook is empty - it contains no cells."
-		}
+			const cells = notebookEditor.notebook.getCells()
+			if (cells.length === 0) {
+				return "# Notebook Analysis\n\nThe notebook is empty - it contains no cells."
+			}
 
-		let result = `# Notebook Analysis\n\nNotebook contains ${cells.length} cells:\n\n`
+			let result = `# Notebook Analysis\n\nNotebook contains ${cells.length} cells:\n\n`
 
-		for (const cell of cells) {
-			result += showCell(cell, maxOutputSize)
-			result += "---\n\n"
-		}
+			for (const cell of cells) {
+				result += showCell(cell, maxOutputSize)
+				result += "---\n\n"
+			}
 
-		return result
+			return result
+		}, 'getCells', { operation: 'getCells', maxOutputSize });
 	}
 
 	/**
@@ -283,70 +320,78 @@ export class NotebookService {
 		maxOutputSize: number = 2000,
 		timeoutSeconds: number = 30,
 	): Promise<string> {
-		const notebookEditor = vscode.window.activeNotebookEditor
-		if (!notebookEditor) {
-			throw new Error("No active notebook editor found.")
-		}
+		const context: ErrorContext = {
+			operation: 'insertCells',
+			insertPosition,
+			cellCount: cells.length
+		};
 
-		if (cells.length === 0) {
-			throw new Error("cells array is required and must not be empty.")
-		}
+		return ErrorUtils.safeExecute(async () => {
+			const notebookEditor = vscode.window.activeNotebookEditor
+			if (!notebookEditor) {
+				throw ErrorFactory.noActiveNotebook('insertCells');
+			}
 
-		const position =
-			typeof insertPosition === "number"
-				? Math.min(Math.max(0, insertPosition), notebookEditor.notebook.cellCount)
-				: notebookEditor.notebook.cellCount // Default to end
+			if (cells.length === 0) {
+				throw ErrorFactory.validationError('cells array is required and must not be empty', context);
+			}
 
-		// Create cell data for each cell definition
-		const cellDataArray: vscode.NotebookCellData[] = cells.map((cellDefinition) => {
-			// Determine cell kind based on cell_type
-			const cellKind =
-				cellDefinition.cell_type === "code" ? vscode.NotebookCellKind.Code : vscode.NotebookCellKind.Markup
+			const position =
+				typeof insertPosition === "number"
+					? Math.min(Math.max(0, insertPosition), notebookEditor.notebook.cellCount)
+					: notebookEditor.notebook.cellCount // Default to end
 
-			// Set language ID based on parameters and cell type
-			let cellLanguageId =
-				cellKind === vscode.NotebookCellKind.Markup ? "markdown" : cellDefinition.language_id || ""
+			// Create cell data for each cell definition
+			const cellDataArray: vscode.NotebookCellData[] = cells.map((cellDefinition) => {
+				// Determine cell kind based on cell_type
+				const cellKind =
+					cellDefinition.cell_type === "code" ? vscode.NotebookCellKind.Code : vscode.NotebookCellKind.Markup
 
-			// If still no language ID for code cells, try to get from existing cells as fallback
-			if (cellKind === vscode.NotebookCellKind.Code && !cellLanguageId && notebookEditor.notebook.cellCount > 0) {
-				// Try to get language from existing code cells
-				for (const cell of notebookEditor.notebook.getCells()) {
-					if (cell.kind === vscode.NotebookCellKind.Code) {
-						cellLanguageId = cell.document.languageId
-						break
+				// Set language ID based on parameters and cell type
+				let cellLanguageId =
+					cellKind === vscode.NotebookCellKind.Markup ? "markdown" : cellDefinition.language_id || ""
+
+				// If still no language ID for code cells, try to get from existing cells as fallback
+				if (cellKind === vscode.NotebookCellKind.Code && !cellLanguageId && notebookEditor.notebook.cellCount > 0) {
+					// Try to get language from existing code cells
+					for (const cell of notebookEditor.notebook.getCells()) {
+						if (cell.kind === vscode.NotebookCellKind.Code) {
+							cellLanguageId = cell.document.languageId
+							break
+						}
+					}
+
+					// Final fallback
+					if (!cellLanguageId) {
+						cellLanguageId = "python" // Python is the more common default for data notebooks
 					}
 				}
 
-				// Final fallback
-				if (!cellLanguageId) {
-					cellLanguageId = "python" // Python is the more common default for data notebooks
-				}
-			}
+				return new vscode.NotebookCellData(cellKind, cellDefinition.content, cellLanguageId)
+			})
 
-			return new vscode.NotebookCellData(cellKind, cellDefinition.content, cellLanguageId)
-		})
+			// Create a notebook edit to insert the cells
+			const notebookEdit = vscode.NotebookEdit.insertCells(position, cellDataArray)
 
-		// Create a notebook edit to insert the cells
-		const notebookEdit = vscode.NotebookEdit.insertCells(position, cellDataArray)
+			// Apply the edit
+			const workspaceEdit = new vscode.WorkspaceEdit()
+			workspaceEdit.set(notebookEditor.notebook.uri, [notebookEdit])
 
-		// Apply the edit
-		const workspaceEdit = new vscode.WorkspaceEdit()
-		workspaceEdit.set(notebookEditor.notebook.uri, [notebookEdit])
+			await vscode.workspace.applyEdit(workspaceEdit)
 
-		await vscode.workspace.applyEdit(workspaceEdit)
+			const result = `Successfully inserted ${cellDataArray.length} new cells at position ${position}.`
+			if (noexec) return result
 
-		const result = `Successfully inserted ${cellDataArray.length} new cells at position ${position}.`
-		if (noexec) return result
-
-		// Execute the newly inserted cells
-		const executionResult = await executeNotebookCells(
-			notebookEditor.notebook.getCells(),
-			position,
-			position + cellDataArray.length,
-			maxOutputSize,
-			timeoutSeconds,
-		)
-		return result + `\n\n${executionResult}`
+			// Execute the newly inserted cells
+			const executionResult = await executeNotebookCells(
+				notebookEditor.notebook.getCells(),
+				position,
+				position + cellDataArray.length,
+				maxOutputSize,
+				timeoutSeconds,
+			)
+			return result + `\n\n${executionResult}`
+		}, 'insertCells', context);
 	}
 
 	/**
@@ -372,82 +417,91 @@ export class NotebookService {
 		maxOutputSize: number = 2000,
 		timeoutSeconds: number = 30,
 	): Promise<string> {
-		const notebookEditor = vscode.window.activeNotebookEditor
-		if (!notebookEditor) {
-			throw new Error("No active notebook editor found.")
-		}
-
-		const existingCells = notebookEditor.notebook.getCells()
-
-		// Let the callback validate indices and cells based on cell count
-		const { startIndex, stopIndex, cells } = validateIndicesAndCells(existingCells.length)
-
-		const cellsToReplace = existingCells.slice(startIndex, stopIndex)
-		const cellDataArray: vscode.NotebookCellData[] = cells.map((cellDefinition, iCell) => {
-			// Determine cell kind based on cell_type or from existing cell if not specified
-			let cellKind: vscode.NotebookCellKind
-
-			if (cellDefinition.cell_type) {
-				cellKind =
-					cellDefinition.cell_type === "code" ? vscode.NotebookCellKind.Code : vscode.NotebookCellKind.Markup
-			} else {
-				// Use the kind of the corresponding cell, or first cell being replaced
-				cellKind = cellsToReplace[iCell < cellsToReplace.length ? iCell : 0].kind
+		return ErrorUtils.safeExecute(async () => {
+			const notebookEditor = vscode.window.activeNotebookEditor
+			if (!notebookEditor) {
+				throw ErrorFactory.noActiveNotebook('replaceCells');
 			}
 
-			// Determine language ID based on params, or use existing if not provided
-			let languageId: string
-			if (cellKind === vscode.NotebookCellKind.Markup) {
-				if (cellDefinition.language_id !== undefined && cellDefinition.language_id !== "markdown") {
-					throw new Error("language_id must be 'markdown' for markdown cells.")
+			const existingCells = notebookEditor.notebook.getCells()
+
+			// Let the callback validate indices and cells based on cell count
+			const { startIndex, stopIndex, cells } = validateIndicesAndCells(existingCells.length)
+
+			const context: ErrorContext = {
+				operation: 'replaceCells',
+				startIndex,
+				stopIndex,
+				cellCount: existingCells.length
+			};
+
+			const cellsToReplace = existingCells.slice(startIndex, stopIndex)
+			const cellDataArray: vscode.NotebookCellData[] = cells.map((cellDefinition, iCell) => {
+				// Determine cell kind based on cell_type or from existing cell if not specified
+				let cellKind: vscode.NotebookCellKind
+
+				if (cellDefinition.cell_type) {
+					cellKind =
+						cellDefinition.cell_type === "code" ? vscode.NotebookCellKind.Code : vscode.NotebookCellKind.Markup
+				} else {
+					// Use the kind of the corresponding cell, or first cell being replaced
+					cellKind = cellsToReplace[iCell < cellsToReplace.length ? iCell : 0].kind
 				}
-				languageId = "markdown"
-			} else if (cellDefinition.language_id) {
-				languageId = cellDefinition.language_id
-			} else if (iCell < cellsToReplace.length && cellsToReplace[iCell].kind === vscode.NotebookCellKind.Code) {
-				languageId = cellsToReplace[iCell].document.languageId
-			} else {
-				const firstCodeCell = cellsToReplace.find((cell) => cell.kind === vscode.NotebookCellKind.Code)
-				languageId = firstCodeCell?.document.languageId || "python" // Default to python if no language found
-			}
 
-			// Create cell data with content and properties
-			const cellData = new vscode.NotebookCellData(cellKind, cellDefinition.content, languageId)
-
-			// Try to preserve metadata from the corresponding cell, leave execution summary cleared
-			if (iCell < cellsToReplace.length) {
-				const peerCell = cellsToReplace[iCell]
-				if (peerCell.kind === cellData.kind) {
-					cellData.metadata = peerCell.metadata
+				// Determine language ID based on params, or use existing if not provided
+				let languageId: string
+				if (cellKind === vscode.NotebookCellKind.Markup) {
+					if (cellDefinition.language_id !== undefined && cellDefinition.language_id !== "markdown") {
+						throw ErrorFactory.validationError("language_id must be 'markdown' for markdown cells", context);
+					}
+					languageId = "markdown"
+				} else if (cellDefinition.language_id) {
+					languageId = cellDefinition.language_id
+				} else if (iCell < cellsToReplace.length && cellsToReplace[iCell].kind === vscode.NotebookCellKind.Code) {
+					languageId = cellsToReplace[iCell].document.languageId
+				} else {
+					const firstCodeCell = cellsToReplace.find((cell) => cell.kind === vscode.NotebookCellKind.Code)
+					languageId = firstCodeCell?.document.languageId || "python" // Default to python if no language found
 				}
-			}
 
-			return cellData
-		})
+				// Create cell data with content and properties
+				const cellData = new vscode.NotebookCellData(cellKind, cellDefinition.content, languageId)
 
-		// Create notebook edit to replace the range with new cells
-		const notebookEdit = vscode.NotebookEdit.replaceCells(
-			new vscode.NotebookRange(startIndex, stopIndex),
-			cellDataArray,
-		)
+				// Try to preserve metadata from the corresponding cell, leave execution summary cleared
+				if (iCell < cellsToReplace.length) {
+					const peerCell = cellsToReplace[iCell]
+					if (peerCell.kind === cellData.kind) {
+						cellData.metadata = peerCell.metadata
+					}
+				}
 
-		// Apply the edit
-		const workspaceEdit = new vscode.WorkspaceEdit()
-		workspaceEdit.set(notebookEditor.notebook.uri, [notebookEdit])
+				return cellData
+			})
 
-		await vscode.workspace.applyEdit(workspaceEdit)
+			// Create notebook edit to replace the range with new cells
+			const notebookEdit = vscode.NotebookEdit.replaceCells(
+				new vscode.NotebookRange(startIndex, stopIndex),
+				cellDataArray,
+			)
 
-		const result = `Successfully replaced ${stopIndex - startIndex} cells with ${cellDataArray.length} new cells.`
-		if (noexec) return result
+			// Apply the edit
+			const workspaceEdit = new vscode.WorkspaceEdit()
+			workspaceEdit.set(notebookEditor.notebook.uri, [notebookEdit])
 
-		const executionResult = await executeNotebookCells(
-			notebookEditor.notebook.getCells(),
-			startIndex,
-			startIndex + cellDataArray.length,
-			maxOutputSize,
-			timeoutSeconds,
-		)
-		return result + `\n\n${executionResult}`
+			await vscode.workspace.applyEdit(workspaceEdit)
+
+			const result = `Successfully replaced ${stopIndex - startIndex} cells with ${cellDataArray.length} new cells.`
+			if (noexec) return result
+
+			const executionResult = await executeNotebookCells(
+				notebookEditor.notebook.getCells(),
+				startIndex,
+				startIndex + cellDataArray.length,
+				maxOutputSize,
+				timeoutSeconds,
+			)
+			return result + `\n\n${executionResult}`
+		}, 'replaceCells', { operation: 'replaceCells' });
 	}
 
 	/**
@@ -467,38 +521,40 @@ export class NotebookService {
 		maxOutputSize: number = 2000,
 		timeoutSeconds: number = 30,
 	): Promise<string> {
-		const notebookEditor = vscode.window.activeNotebookEditor
-		if (!notebookEditor) {
-			throw new Error("No active notebook editor found.")
-		}
+		return ErrorUtils.safeExecute(async () => {
+			const notebookEditor = vscode.window.activeNotebookEditor
+			if (!notebookEditor) {
+				throw ErrorFactory.noActiveNotebook('modifyCellContent');
+			}
 
-		let cellIndex = 0
+			let cellIndex = 0
 
-		await NotebookService.replaceCells(
-			(cellCount: number) => {
-				cellIndex = validateCellIndex(cellCount)
-				return {
-					startIndex: cellIndex,
-					stopIndex: cellIndex + 1,
-					cells: [{ content }],
-				}
-			},
-			true,
-			maxOutputSize,
-			timeoutSeconds,
-		)
+			await NotebookService.replaceCells(
+				(cellCount: number) => {
+					cellIndex = validateCellIndex(cellCount)
+					return {
+						startIndex: cellIndex,
+						stopIndex: cellIndex + 1,
+						cells: [{ content }],
+					}
+				},
+				true,
+				maxOutputSize,
+				timeoutSeconds,
+			)
 
-		const result = `Successfully modified cell at index ${cellIndex} with new content.`
-		if (noexec) return result
+			const result = `Successfully modified cell at index ${cellIndex} with new content.`
+			if (noexec) return result
 
-		const executionResult = await executeNotebookCells(
-			notebookEditor.notebook.getCells(),
-			cellIndex,
-			cellIndex + 1,
-			maxOutputSize,
-			timeoutSeconds,
-		)
-		return result + `\n\n${executionResult}`
+			const executionResult = await executeNotebookCells(
+				notebookEditor.notebook.getCells(),
+				cellIndex,
+				cellIndex + 1,
+				maxOutputSize,
+				timeoutSeconds,
+			)
+			return result + `\n\n${executionResult}`
+		}, 'modifyCellContent', { operation: 'modifyCellContent' });
 	}
 
 	/**
@@ -514,20 +570,22 @@ export class NotebookService {
 		maxOutputSize: number = 2000,
 		timeoutSeconds: number = 30,
 	): Promise<string> {
-		const notebookEditor = vscode.window.activeNotebookEditor
-		if (!notebookEditor) {
-			throw new Error("No active notebook editor found.")
-		}
+		return ErrorUtils.safeExecute(async () => {
+			const notebookEditor = vscode.window.activeNotebookEditor
+			if (!notebookEditor) {
+				throw ErrorFactory.noActiveNotebook('executeCells');
+			}
 
-		const cells = notebookEditor.notebook.getCells()
+			const cells = notebookEditor.notebook.getCells()
 
-		// Let the callback validate and return the indices based on cell count
-		const { startIndex, stopIndex } = validateIndices(cells.length)
+			// Let the callback validate and return the indices based on cell count
+			const { startIndex, stopIndex } = validateIndices(cells.length)
 
-		// Execute the cells and get the results
-		const result = await executeNotebookCells(cells, startIndex, stopIndex, maxOutputSize, timeoutSeconds)
+			// Execute the cells and get the results
+			const result = await executeNotebookCells(cells, startIndex, stopIndex, maxOutputSize, timeoutSeconds)
 
-		return result
+			return result
+		}, 'executeCells', { operation: 'executeCells' });
 	}
 
 	/**
@@ -539,29 +597,31 @@ export class NotebookService {
 	static async deleteCells(
 		validateIndices: (cellCount: number) => { startIndex: number; stopIndex: number },
 	): Promise<string> {
-		const notebookEditor = vscode.window.activeNotebookEditor
-		if (!notebookEditor) {
-			throw new Error("No active notebook editor found.")
-		}
+		return ErrorUtils.safeExecute(async () => {
+			const notebookEditor = vscode.window.activeNotebookEditor
+			if (!notebookEditor) {
+				throw ErrorFactory.noActiveNotebook('deleteCells');
+			}
 
-		const existingCells = notebookEditor.notebook.getCells()
+			const existingCells = notebookEditor.notebook.getCells()
 
-		// Let the callback validate indices based on cell count
-		const { startIndex, stopIndex } = validateIndices(existingCells.length)
+			// Let the callback validate indices based on cell count
+			const { startIndex, stopIndex } = validateIndices(existingCells.length)
 
-		// Calculate how many cells will be deleted
-		const deleteCount = stopIndex - startIndex
+			// Calculate how many cells will be deleted
+			const deleteCount = stopIndex - startIndex
 
-		// Create notebook edit to delete the range of cells
-		const notebookEdit = vscode.NotebookEdit.deleteCells(new vscode.NotebookRange(startIndex, stopIndex))
+			// Create notebook edit to delete the range of cells
+			const notebookEdit = vscode.NotebookEdit.deleteCells(new vscode.NotebookRange(startIndex, stopIndex))
 
-		// Apply the edit
-		const workspaceEdit = new vscode.WorkspaceEdit()
-		workspaceEdit.set(notebookEditor.notebook.uri, [notebookEdit])
+			// Apply the edit
+			const workspaceEdit = new vscode.WorkspaceEdit()
+			workspaceEdit.set(notebookEditor.notebook.uri, [notebookEdit])
 
-		await vscode.workspace.applyEdit(workspaceEdit)
+			await vscode.workspace.applyEdit(workspaceEdit)
 
-		return `Successfully deleted ${deleteCount} cell${deleteCount !== 1 ? "s" : ""} from index ${startIndex} to ${stopIndex - 1}.`
+			return `Successfully deleted ${deleteCount} cell${deleteCount !== 1 ? "s" : ""} from index ${startIndex} to ${stopIndex - 1}.`
+		}, 'deleteCells', { operation: 'deleteCells' });
 	}
 
 	/**
@@ -570,14 +630,21 @@ export class NotebookService {
 	 * @returns A string indicating success or failure
 	 */
 	static async saveNotebook(): Promise<string> {
-		const notebookEditor = vscode.window.activeNotebookEditor
-		if (!notebookEditor) {
-			throw new Error("No active notebook editor found.")
-		}
+		return ErrorUtils.safeExecute(async () => {
+			const notebookEditor = vscode.window.activeNotebookEditor
+			if (!notebookEditor) {
+				throw ErrorFactory.noActiveNotebook('saveNotebook');
+			}
 
-		// Save the notebook using the workspace API
-		await vscode.workspace.save(notebookEditor.notebook.uri)
+			// Save the notebook using the workspace API
+			await vscode.workspace.save(notebookEditor.notebook.uri)
 
-		return `Successfully saved notebook: ${notebookEditor.notebook.uri.toString()}`
+			return `Successfully saved notebook: ${notebookEditor.notebook.uri.toString()}`
+		}, 'saveNotebook', {
+			operation: 'saveNotebook'
+		});
 	}
 }
+
+// Backward compatibility - export the old NotebookError as an alias to RooNotebookError
+export const NotebookError = RooNotebookError;

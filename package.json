@@ -1,7 +1,7 @@
 {
   "name": "roo-nb",
   "displayName": "Roo Notebook Tools",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Notebook operation tools for Language Models",
   "publisher": "ComplYue",
   "private": true,
@@ -35,9 +35,56 @@
           "type": "integer",
           "default": 30,
           "description": "Maximum seconds to wait for cell execution"
+        },
+        "roo-nb.mcp.enable": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable MCP server with OS-assigned port (false = disabled, true = enabled)"
+        },
+        "roo-nb.mcp.requestTimeoutSeconds": {
+          "type": "integer",
+          "default": 600,
+          "minimum": 30,
+          "maximum": 3600,
+          "description": "Request timeout in seconds for MCP server HTTP requests (30-3600 seconds)"
+        },
+        "roo-nb.mcp.maxRequestSizeMB": {
+          "type": "number",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Maximum request size in MB for MCP server HTTP requests (1-100 MB)"
+        },
+        "roo-nb.logging.level": {
+          "type": "string",
+          "enum": [
+            "debug",
+            "info",
+            "warn",
+            "error"
+          ],
+          "default": "info",
+          "description": "Logging level for Roo Notebook operations"
+        },
+        "roo-nb.logging.showInOutput": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show logs in VS Code Output panel"
         }
       }
     },
+    "commands": [
+      {
+        "command": "roo-nb.configGlobalMCPServer",
+        "title": "Config Roo Notebook as Global MCP Server",
+        "category": "Roo Notebook"
+      },
+      {
+        "command": "roo-nb.showLogs",
+        "title": "Show Output Logs",
+        "category": "Roo Notebook"
+      }
+    ],
     "languageModelTools": [
       {
         "name": "get_notebook_info",
@@ -292,5 +339,9 @@
     "@vscode/vsce": "^3.3.2",
     "eslint": "^8.54.0",
     "typescript": "^5.3.2"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.13.0",
+    "zod": "^3.25.67"
   }
 }
