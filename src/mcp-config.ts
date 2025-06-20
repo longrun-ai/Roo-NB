@@ -208,14 +208,11 @@ async function ensureCursorMCPConfiguration(workspaceFolder: vscode.WorkspaceFol
         const configPath = path.join(workspaceFolder.uri.fsPath, '.cursor', 'mcp.json');
         let message = `MCP server configured successfully on port ${port}. ` +
             `The server is now available at http://127.0.0.1:${port}/mcp\n\n` +
-            `Configuration saved to: ${configPath}`;
+            `Configuration saved to: ${configPath}\n\n` +
+            `Cursor should show a notification about the new MCP server. ` +
+            `If you don't see it, check your MCP settings to enable the server.`;
 
-        const openConfigAction = 'Open MCP Settings';
-        const userResult = await vscode.window.showInformationMessage(`Roo Notebook: ${message}`, openConfigAction);
-
-        if (userResult === openConfigAction) {
-            await vscode.commands.executeCommand('workbench.action.openSettings', '@ext:cursor.mcp');
-        }
+        await vscode.window.showInformationMessage(`Roo Notebook: ${message}`);
     }
 }
 
