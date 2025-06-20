@@ -117,20 +117,26 @@ export class Logger {
   private static outputChannel: vscode.OutputChannel | undefined;
 
   /**
-   * Initialize the logger with a VS Code output channel
+   * Show the VS Code output channel for this logger
+   * @returns true if output channel was shown, false if not available
    */
-  static initialize(outputChannel?: vscode.OutputChannel): void {
-    this.outputChannel = outputChannel;
+  static showOutputChannel(): boolean {
+    if (this.outputChannel) {
+      this.outputChannel.show();
+      return true;
+    }
+    return false;
   }
 
   /**
-   * Show the output channel in VS Code
+   * Ensure a VS Code output channel for the logger
    */
-  static show(): void {
-    if (this.outputChannel) {
-      this.outputChannel.show();
-    }
+  static ensureOutputChannel(context: vscode.ExtensionContext): void {
+    if (this.outputChannel) return;
+    this.outputChannel = vscode.window.createOutputChannel('Roo Notebook');
+    context.subscriptions.push(this.outputChannel);
   }
+
 
   /**
    * Log debug information (for developers)
@@ -198,6 +204,7 @@ export class Logger {
 
   /**
    * Get the configured log level from VS Code settings
+   * @returns The configured log level, defaults to INFO if invalid
    */
   private static getConfiguredLogLevel(): LogLevel {
     const config = vscode.workspace.getConfiguration('roo-nb.logging');
@@ -213,7 +220,9 @@ export class Logger {
   }
 
   /**
-   * Check if we should log at the given level
+   * Check if we should log at the given level based on configuration
+   * @param level The log level to check
+   * @returns true if logging should occur at this level
    */
   private static shouldLog(level: LogLevel): boolean {
     const configuredLevel = this.getConfiguredLogLevel();
@@ -221,8 +230,13 @@ export class Logger {
   }
 
   /**
- * Write log message to both console and output channel
- */
+   * Write log message to both console and VS Code output channel
+   * Uses appropriate console methods (debug, log, warn, error) based on level
+   * and conditionally writes to output channel if available
+   * @param level The log level string (DEBUG, INFO, WARN, ERROR)
+   * @param message The message to log
+   * @param context Optional context information for structured logging
+   */
   private static writeLog(level: string, message: string, context?: ErrorContext): void {
     const timestamp = new Date().toISOString();
 
@@ -355,13 +369,25 @@ export class ErrorFormatter {
 }
 
 /**
- * Error factory functions for common error scenarios
+ * Error factory functions for creating common error scenarios
+ * Provides convenience methods for creating standardized RooNotebookError instances
  */
 export class ErrorFactory {
+  /**
+   * Create a validation error for invalid input parameters
+   * @param message Descriptive error message
+   * @param context Optional context information
+   * @returns RooNotebookError with VALIDATION_ERROR code
+   */
   static validationError(message: string, context?: ErrorContext): RooNotebookError {
     return new RooNotebookError(message, ErrorCodes.VALIDATION_ERROR, context);
   }
 
+  /**
+   * Create an error for when no active notebook is available
+   * @param operation Optional name of the operation that failed
+   * @returns RooNotebookError with NO_ACTIVE_NOTEBOOK code
+   */
   static noActiveNotebook(operation?: string): RooNotebookError {
     return new RooNotebookError(
       'No active notebook editor found',
@@ -370,6 +396,13 @@ export class ErrorFactory {
     );
   }
 
+  /**
+   * Create an error for array/cell index out of bounds
+   * @param index The invalid index that was accessed
+   * @param maxIndex The maximum valid index (inclusive)
+   * @param operation Optional name of the operation that failed
+   * @returns RooNotebookError with INDEX_OUT_OF_BOUNDS code
+   */
   static indexOutOfBounds(index: number, maxIndex: number, operation?: string): RooNotebookError {
     return new RooNotebookError(
       `Index ${index} is out of bounds (0-${maxIndex})`,
@@ -378,6 +411,14 @@ export class ErrorFactory {
     );
   }
 
+  /**
+   * Create an error for invalid range specifications (start/stop indices)
+   * @param startIndex The start index of the invalid range
+   * @param stopIndex The stop index of the invalid range
+   * @param cellCount The total number of cells available
+   * @param operation Optional name of the operation that failed
+   * @returns RooNotebookError with INDEX_OUT_OF_BOUNDS code
+   */
   static rangeOutOfBounds(startIndex: number, stopIndex: number, cellCount: number, operation?: string): RooNotebookError {
     return new RooNotebookError(
       `Range ${startIndex}-${stopIndex} is invalid for ${cellCount} cells`,
@@ -386,6 +427,12 @@ export class ErrorFactory {
     );
   }
 
+  /**
+   * Create an error for operation timeouts
+   * @param timeout The timeout duration in seconds
+   * @param operation Optional name of the operation that timed out
+   * @returns RooNotebookError with EXECUTION_TIMEOUT code
+   */
   static executionTimeout(timeout: number, operation?: string): RooNotebookError {
     return new RooNotebookError(
       `Execution timed out after ${timeout} seconds`,
@@ -394,6 +441,13 @@ export class ErrorFactory {
     );
   }
 
+  /**
+   * Create an error for MCP server failures
+   * @param message Descriptive error message
+   * @param port Optional port number the server was trying to use
+   * @param cause Optional underlying error that caused the failure
+   * @returns RooNotebookError with MCP_SERVER_START_FAILED code
+   */
   static mcpServerError(message: string, port?: number, cause?: unknown): RooNotebookError {
     return new RooNotebookError(
       message,
@@ -403,10 +457,23 @@ export class ErrorFactory {
     );
   }
 
+  /**
+   * Create a configuration-related error
+   * @param message Descriptive error message
+   * @param context Optional context information about the configuration issue
+   * @returns RooNotebookError with CONFIG_ERROR code
+   */
   static configError(message: string, context?: ErrorContext): RooNotebookError {
     return new RooNotebookError(message, ErrorCodes.CONFIG_ERROR, context);
   }
 
+  /**
+   * Create a tool execution error for MCP tools
+   * @param toolName Name of the tool that failed
+   * @param message Descriptive error message
+   * @param context Optional context information
+   * @returns RooNotebookError with MCP_TOOL_ERROR code
+   */
   static toolError(toolName: string, message: string, context?: ErrorContext): RooNotebookError {
     return new RooNotebookError(
       message,
@@ -415,6 +482,14 @@ export class ErrorFactory {
     );
   }
 
+  /**
+   * Wrap an unknown error into a standardized RooNotebookError
+   * If the error is already a RooNotebookError, returns it unchanged
+   * @param error The error to wrap (can be any type)
+   * @param code The error code to assign
+   * @param context Optional context information
+   * @returns RooNotebookError instance
+   */
   static wrapError(error: unknown, code: ErrorCode, context?: ErrorContext): RooNotebookError {
     if (error instanceof RooNotebookError) {
       return error;
@@ -426,11 +501,18 @@ export class ErrorFactory {
 }
 
 /**
- * Utility functions for error handling
+ * Utility functions for error handling and user interactions
+ * Provides common patterns for error handling and user notifications
  */
 export class ErrorUtils {
   /**
-   * Safely execute an async operation with error handling
+   * Safely execute an async operation with comprehensive error handling and logging
+   * Logs operation start/success/failure and re-throws errors for caller handling
+   * @param operation The async function to execute
+   * @param operationName Human-readable name for logging purposes
+   * @param context Optional context information for logging
+   * @returns Promise resolving to the operation result
+   * @throws Re-throws any error from the operation after logging
    */
   static async safeExecute<T>(
     operation: () => Promise<T>,
@@ -450,7 +532,9 @@ export class ErrorUtils {
   }
 
   /**
-   * Show user-friendly error message in VS Code
+   * Display a user-friendly error message in VS Code's UI
+   * Formats the error appropriately for end users and shows as error notification
+   * @param error The error to display (any type, will be formatted)
    */
   static showUserError(error: unknown): void {
     const message = ErrorFormatter.forUser(error);
@@ -458,14 +542,16 @@ export class ErrorUtils {
   }
 
   /**
-   * Show user-friendly warning message in VS Code
+   * Display a warning message to the user in VS Code's UI
+   * @param message The warning message to display
    */
   static showUserWarning(message: string): void {
     vscode.window.showWarningMessage(`Roo Notebook: ${message}`);
   }
 
   /**
-   * Show user-friendly info message in VS Code
+   * Display an informational message to the user in VS Code's UI
+   * @param message The informational message to display
    */
   static showUserInfo(message: string): void {
     vscode.window.showInformationMessage(`Roo Notebook: ${message}`);
@@ -473,11 +559,20 @@ export class ErrorUtils {
 }
 
 /**
- * Configuration validation utilities
+ * Configuration validation utilities with type safety and bounds checking
+ * Provides robust validation for VS Code configuration values with proper fallbacks
  */
 export class ConfigValidator {
   /**
-   * Validates and returns a numeric configuration value within bounds
+   * Validates and returns a numeric configuration value with bounds checking
+   * Handles invalid values gracefully with logging and fallback to defaults
+   * @param config The VS Code workspace configuration object
+   * @param key The configuration key to retrieve
+   * @param defaultValue Default value to use if invalid or missing
+   * @param min Optional minimum allowed value (inclusive)
+   * @param max Optional maximum allowed value (inclusive)
+   * @param context Optional context for logging
+   * @returns The validated numeric value, clamped to bounds if necessary
    */
   static getNumericConfig(
     config: vscode.WorkspaceConfiguration,
@@ -524,6 +619,9 @@ export class ConfigValidator {
 
   /**
    * Gets and validates all notebook-related configuration values
+   * Retrieves maxOutputSize and timeoutSeconds with proper validation and bounds
+   * @param context Optional context information for logging
+   * @returns Object containing validated notebook settings
    */
   static getNotebookSettings(context?: ErrorContext): {
     maxOutputSize: number;
@@ -553,6 +651,9 @@ export class ConfigValidator {
 
   /**
    * Gets and validates MCP server configuration values
+   * Retrieves request timeout and max request size with proper validation and bounds
+   * @param context Optional context information for logging
+   * @returns Object containing validated MCP server settings
    */
   static getMCPSettings(context?: ErrorContext): {
     requestTimeoutSeconds: number;

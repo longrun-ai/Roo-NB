@@ -1,8 +1,11 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { NotebookService } from './notebook';
-import { MCPServer } from './mcp-server';
-import { ensureConfigedInIDE } from './mcp-config';
+import {
+  initializeMCPModule,
+  configureProjectMCPServer,
+  cleanupMCPModule
+} from './mcp-config';
 import {
   ErrorFactory,
   ErrorFormatter,
@@ -396,7 +399,6 @@ class InterruptKernelTool extends BaseNotebookTool<void> {
   }
 }
 
-let mcpServer: MCPServer | null = null;
 
 export function activate(context: vscode.ExtensionContext) {
   // Conditionally create and initialize the output channel for logging
@@ -404,17 +406,40 @@ export function activate(context: vscode.ExtensionContext) {
   const showInOutput = config.get<boolean>('logging.showInOutput', true);
 
   if (showInOutput) {
-    const outputChannel = vscode.window.createOutputChannel('Roo Notebook');
-    context.subscriptions.push(outputChannel);
-    Logger.initialize(outputChannel);
-  } else {
-    // Initialize logger without output channel (console logging only)
-    Logger.initialize();
+    Logger.ensureOutputChannel(context);
   }
-
   Logger.info('Extension activated');
 
-  // Proper tool registration
+  // Listen for configuration changes to enable output channel when logging is turned on
+  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
+    if (e.affectsConfiguration('roo-nb.logging.showInOutput')) {
+      const newConfig = vscode.workspace.getConfiguration('roo-nb');
+      const newShowInOutput = newConfig.get<boolean>('logging.showInOutput', true);
+      if (newShowInOutput) {
+        Logger.ensureOutputChannel(context);
+      }
+    }
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand('roo-nb.showLogs', () => {
+    if (Logger.showOutputChannel()) return;
+    vscode.window.showInformationMessage(
+      `Roo Notebook: Enable "roo-nb.logging.showInOutput" in settings to see logs in the Output panel, or use Help > Toggle Developer Tools to view console logs.`,
+      'Open Settings'
+    ).then(selection => {
+      if (selection === 'Open Settings') {
+        vscode.commands.executeCommand('workbench.action.openSettings', 'roo-nb.logging.showInOutput');
+      }
+    });
+  }));
+
+  // Register MCP configuration command
+  context.subscriptions.push(vscode.commands.registerCommand('roo-nb.configProjectMCPServer', async () => {
+    await configureProjectMCPServer();
+  }));
+
+
+  // Proper LM tool registration
   const tools = [
     new GetNotebookInfoTool(),
     new GetNotebookCellsTool(),
@@ -428,131 +453,14 @@ export function activate(context: vscode.ExtensionContext) {
     new RestartKernelTool(),
     new InterruptKernelTool()
   ];
-
   tools.forEach(tool => tool.register(context));
-
   Logger.info('Extension tools registered successfully');
 
-  // Register commands
-  context.subscriptions.push(vscode.commands.registerCommand('roo-nb.configGlobalMCPServer', async () => {
-    await configureGlobalMCPServer(context);
-  }));
 
-  context.subscriptions.push(vscode.commands.registerCommand('roo-nb.showLogs', () => {
-    Logger.show();
-  }));
-
-  // Handle MCP server functionality
-  initializeMCPServer(context);
-}
-
-async function configureGlobalMCPServer(context: vscode.ExtensionContext) {
-  const operation = 'configureGlobalMCPServer';
-
-  return ErrorUtils.safeExecute(async () => {
-    const config = vscode.workspace.getConfiguration('roo-nb');
-
-    // Check current mcp.enable settings in different scopes
-    const inspect = config.inspect<boolean>('mcp.enable');
-    const workspaceValue = inspect?.workspaceValue;
-    const workspaceFolderValue = inspect?.workspaceFolderValue;
-
-    // If mcp.enable is explicitly set to false in workspace or workspace folder scope, ask user
-    if (workspaceValue === false || workspaceFolderValue === false) {
-      const scopeName = workspaceFolderValue === false ? 'workspace folder' : 'workspace';
-      const overwrite = await vscode.window.showWarningMessage(
-        `The 'mcp.enable' setting is currently set to false in the ${scopeName} scope. Do you want to overwrite this setting?`,
-        { modal: true },
-        'Yes, overwrite',
-        'No, keep current setting'
-      );
-
-      if (overwrite !== 'Yes, overwrite') {
-        ErrorUtils.showUserInfo('MCP server configuration cancelled.');
-        return;
-      }
-
-      // User chose to overwrite, so update the same scope that had the false value
-      const targetScope = workspaceFolderValue === false
-        ? vscode.ConfigurationTarget.WorkspaceFolder
-        : vscode.ConfigurationTarget.Workspace;
-
-      await config.update('mcp.enable', true, targetScope);
-    } else {
-      // Only set to global scope if there are no settings in other scopes
-      if (workspaceValue === undefined && workspaceFolderValue === undefined) {
-        await config.update('mcp.enable', true, vscode.ConfigurationTarget.Global);
-      } else {
-        // There are settings in other scopes, but not false - likely already true
-        // Don't change anything in this case
-      }
-    }
-
-    // Stop existing server if running
-    if (mcpServer) {
-      await mcpServer.stop();
-      mcpServer = null;
-    }
-
-    // Get extension package.json from context
-    const packageJSON = context.extension.packageJSON;
-
-    // Start new MCP server with OS-assigned port
-    mcpServer = new MCPServer(packageJSON);
-    const actualPort = await mcpServer.start();
-    Logger.info('MCP server started', { port: actualPort });
-
-    // Configure IDE automatically (includes UI treatments)
-    await ensureConfigedInIDE(actualPort);
-
-  }, operation, { operation }).catch(error => {
-    Logger.error('Error configuring MCP server', error, { operation });
-    ErrorUtils.showUserError(ErrorFactory.wrapError(error, 'CONFIG_ERROR', { operation }));
-  });
-}
-
-async function initializeMCPServer(context: vscode.ExtensionContext) {
-  const operation = 'initializeMCPServer';
-  const config = vscode.workspace.getConfiguration('roo-nb');
-  const mcpEnable = config.get<boolean>('mcp.enable', false);
-
-  if (mcpEnable) {
-    return ErrorUtils.safeExecute(async () => {
-      // Get extension package.json from context
-      const packageJSON = context.extension.packageJSON;
-
-      // Start MCP server with OS-assigned port
-      mcpServer = new MCPServer(packageJSON);
-      const actualPort = await mcpServer.start();
-      Logger.info('MCP server started', { port: actualPort });
-
-      // Configure IDE automatically (includes UI treatments)
-      await ensureConfigedInIDE(actualPort);
-
-      // Add cleanup to context
-      context.subscriptions.push({
-        dispose: () => {
-          if (mcpServer) {
-            mcpServer.stop().catch(error => {
-              Logger.error('Error stopping MCP server during cleanup', error);
-            });
-            mcpServer = null;
-          }
-        }
-      });
-    }, operation, { operation }).catch(error => {
-      Logger.error('Error initializing MCP server', error, { operation });
-      ErrorUtils.showUserError(ErrorFactory.wrapError(error, 'MCP_SERVER_START_FAILED', { operation }));
-    });
-  }
+  // Initialize MCP module (handles auto-start if enabled)
+  initializeMCPModule(context);
 }
 
 export function deactivate() {
-  if (mcpServer) {
-    Logger.info('Stopping MCP server...');
-    mcpServer.stop().catch(error => {
-      Logger.error('Error stopping MCP server during deactivation', error);
-    });
-    mcpServer = null;
-  }
+  cleanupMCPModule();
 }

@@ -75,8 +75,8 @@
     },
     "commands": [
       {
-        "command": "roo-nb.configGlobalMCPServer",
-        "title": "Config Roo Notebook as Global MCP Server",
+        "command": "roo-nb.configProjectMCPServer",
+        "title": "Config Roo Notebook as Project MCP Server",
         "category": "Roo Notebook"
       },
       {
