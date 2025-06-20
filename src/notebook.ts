@@ -658,7 +658,7 @@ export class NotebookService {
 			}
 
 			// Execute the restart kernel command
-			await vscode.commands.executeCommand('notebook.restartKernel')
+			await vscode.commands.executeCommand('jupyter.restartkernel')
 
 			return `Successfully restarted kernel for notebook: ${notebookEditor.notebook.uri.toString()}`
 		}, 'restartKernel', {
@@ -679,7 +679,7 @@ export class NotebookService {
 			}
 
 			// Execute the interrupt kernel command
-			await vscode.commands.executeCommand('notebook.interruptKernel')
+			await vscode.commands.executeCommand('jupyter.interruptkernel')
 
 			return `Successfully interrupted kernel execution for notebook: ${notebookEditor.notebook.uri.toString()}`
 		}, 'interruptKernel', {
