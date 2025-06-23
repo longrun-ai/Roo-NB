@@ -106,7 +106,6 @@ async function ensureMCPServerStarted(): Promise<number> {
     // Start new MCP server with OS-assigned port
     mcpServer = new MCPServer(packageJSON);
     const actualPort = await mcpServer.start();
-    Logger.info('MCP server started', { port: actualPort });
 
     return actualPort;
 }
