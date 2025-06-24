@@ -1,7 +1,7 @@
 {
   "name": "roo-nb",
   "displayName": "Roo Notebook Tools",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "description": "Notebook operation tools for Language Models",
   "publisher": "ComplYue",
   "private": true,
