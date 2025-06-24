@@ -27,6 +27,23 @@ export async function getIDEType(): Promise<SupportedIDE> {
 // Global MCP server state management
 let mcpServer: MCPServer | null = null;
 let globalContext: vscode.ExtensionContext | null = null;
+let activeWsFolder: vscode.WorkspaceFolder | null = null;
+
+// Helper function to update active workspace folder
+function updateActiveWsFolder(): vscode.WorkspaceFolder | null {
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    const newActiveFolder = workspaceFolders && workspaceFolders.length > 0 ? workspaceFolders[0] : null;
+
+    if (activeWsFolder !== newActiveFolder) {
+        activeWsFolder = newActiveFolder;
+        Logger.info('Active workspace folder updated', {
+            folderName: activeWsFolder?.name,
+            folderPath: activeWsFolder?.uri.fsPath
+        });
+    }
+
+    return activeWsFolder;
+}
 
 // MCP Module initialization and management functions
 export function initializeMCPModule(context: vscode.ExtensionContext) {
@@ -44,32 +61,39 @@ export function initializeMCPModule(context: vscode.ExtensionContext) {
 
             // Listen for workspace folder changes
             context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(async (event) => {
-                // Configure MCP for newly added workspace folders
-                for (const folder of event.added) {
-                    try {
-                        Logger.info('Configuring MCP for newly added workspace folder', {
-                            folderName: folder.name,
-                            folderPath: folder.uri.fsPath,
-                            port: actualPort
-                        });
+                // Update active workspace folder (first folder)
+                const previousActiveFolder = activeWsFolder;
+                const newActiveFolder = updateActiveWsFolder();
 
-                        await ensureConfiguredForWsFolder(folder, actualPort, false);
+                // Only configure MCP if the active workspace folder changed
+                if (newActiveFolder !== previousActiveFolder) {
+                    try {
+                        if (newActiveFolder) {
+                            Logger.info('Configuring MCP for new active workspace folder', {
+                                folderName: newActiveFolder.name,
+                                folderPath: newActiveFolder.uri.fsPath,
+                                port: actualPort
+                            });
+
+                            await ensureConfiguredForWsFolder(newActiveFolder, actualPort, false);
+                        } else {
+                            Logger.info('No active workspace folder, MCP configuration cleared');
+                        }
                     } catch (error) {
-                        Logger.error('Failed to configure MCP for new workspace folder', error, {
-                            folderName: folder.name,
-                            folderPath: folder.uri.fsPath,
+                        Logger.error('Failed to configure MCP for active workspace folder', error, {
+                            folderName: newActiveFolder?.name,
+                            folderPath: newActiveFolder?.uri.fsPath,
                             port: actualPort
                         });
                     }
                 }
             }));
 
-            // Also configure for existing workspace folders
-            // Configure existing workspace folders automatically (no confirmation)
-            for (const folder of vscode.workspace.workspaceFolders || []) {
-                ensureConfiguredForWsFolder(folder, actualPort, false).catch(error => {
-                    Logger.error('Failed to auto-configure existing workspace folder', error, {
-                        folderName: folder.name,
+            // Initialize active workspace folder, configure MCP for it (no confirmation)
+            if (updateActiveWsFolder()) {
+                ensureConfiguredForWsFolder(activeWsFolder, actualPort, false).catch(error => {
+                    Logger.error('Failed to auto-configure active workspace folder', error, {
+                        folderName: activeWsFolder?.name,
                         actualPort
                     });
                 });
@@ -90,6 +114,7 @@ export function cleanupMCPModule(): void {
         mcpServer = null;
     }
     globalContext = null;
+    activeWsFolder = null;
 }
 
 async function ensureMCPServerStarted(): Promise<number> {
@@ -115,12 +140,14 @@ export async function configureProjectMCPServer(): Promise<void> {
     const operation = 'configureProjectMCPServer';
 
     return ErrorUtils.safeExecute(async () => {
-        // Select workspace folder to configure
-        const selectedFolder = await selectWorkspaceFolder();
-        if (!selectedFolder) {
-            ErrorUtils.showUserError('No workspace folder is open. Please open a folder or workspace before configuring the MCP server.');
+        // Check if any workspace folder is open
+        if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
+            ErrorUtils.showUserError('No workspace folder is open. Please open a folder or workspace and then run the "Configure MCP Server" command again.');
             return;
         }
+
+        // Always use the first workspace folder
+        const wsFolder = vscode.workspace.workspaceFolders[0];
 
         const config = vscode.workspace.getConfiguration('roo-nb');
 
@@ -131,7 +158,7 @@ export async function configureProjectMCPServer(): Promise<void> {
         const actualPort = await ensureMCPServerStarted();
 
         // Configure IDE manually (includes UI treatments)
-        await ensureConfiguredForWsFolder(selectedFolder, actualPort, true);
+        await ensureConfiguredForWsFolder(wsFolder, actualPort, true);
 
     }, operation, { operation }).catch(error => {
         Logger.error('Error configuring MCP server', error, { operation });
@@ -319,28 +346,4 @@ export async function ensureConfiguredForWsFolder(
 
         throw ErrorFactory.wrapError(configError, 'IDE_CONFIG_FAILED', context);
     }
-}
-
-export async function selectWorkspaceFolder(): Promise<vscode.WorkspaceFolder | null> {
-    if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
-        return null;
-    }
-
-    if (vscode.workspace.workspaceFolders.length === 1) {
-        return vscode.workspace.workspaceFolders[0];
-    }
-
-    // Multiple workspace folders - let user choose
-    const items = vscode.workspace.workspaceFolders.map(folder => ({
-        label: folder.name,
-        description: folder.uri.fsPath,
-        folder: folder
-    }));
-
-    const selected = await vscode.window.showQuickPick(items, {
-        placeHolder: 'Select workspace folder to configure MCP server for',
-        canPickMany: false
-    });
-
-    return selected?.folder || null;
 }
